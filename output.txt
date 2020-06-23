@@ -1,0 +1,1 @@
+######### prova = gradient(numbers_gd_loops = 200, n_epochs = 200, X = X_df_trasf, R2_alg_orig = False, ZPLtau_alg_orig = True)
