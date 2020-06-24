@@ -2,7 +2,7 @@ import os
 from multiprocessing import Pool                                                
 import telegram                                                                
                                                                                 
-processes = ('perscript.py', 'perscript.py', 'perscript.py', 'perscript.py')                                    
+processes = ('perscript_adattivo.py', 'perscript_adattivo.py', 'perscript_adattivo.py', 'perscript_adattivo.py')                                    
                                                   
 def notify_ending(message):
     token = '1116796554:AAEyr52UujgqbXkg1yfCvqn-oF4WMuMKgBw'
