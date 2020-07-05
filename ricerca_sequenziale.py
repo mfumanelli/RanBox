@@ -28,7 +28,7 @@ def creazione_df(nobs, nvar, dim_segnale, sigmas, flat_frac):
 
     df = pd.DataFrame(np.random.uniform(0, 1, size=(nobs, nvar)), columns=columns)
     df.insert(0, "Signal", np.zeros(nobs), True)
-    for i in np.arange(1, nobs):
+    for i in np.arange(0, nobs):
         tmp = 0
         if i < flat_frac * nobs:
             df.iloc[i, 0] = 0
@@ -116,7 +116,7 @@ def random_box_subspace(NVar, NRanBox, eps=0.01):
     VolumeOrig = np.cumprod(Blockmax - Blockmin)
     # first_idx_not_valid = np.argmax((VolumeOrig * goodevents) < 1)
     first_idx_not_valid = np.argmax(VolumeOrig < 0.001)
-    Blockmin[(first_idx_not_valid - 1) :] = 0  # non sono così sicura di questa parte
+    Blockmin[(first_idx_not_valid - 1) :] = 0
     Blockmax[(first_idx_not_valid - 1) :] = 1
     if first_idx_not_valid == 0:
         return random_box_subspace(NVar, NRanBox)
@@ -159,7 +159,7 @@ def ZPLtau(Non, Noff, tau):
             Non * np.log(Non * (1 + tau) / (Ntot))
             + Noff * np.log(Noff * (1 + tau) / (Ntot * tau))
         )
-        if Non < (Noff / (tau + 0.000001)):
+        if Non < (Noff / (tau)):
             return -z
         else:
             return z
@@ -208,7 +208,7 @@ def percentuale_segnale(prova):
 # In[17]:
 
 
-def best_box(dict_scatole, df_completo):
+def best_box(dict_scatole, df_completo, frazione_segnale_tot):
     size = len(dict_scatole)
     ris = np.zeros([size, 2])
     for k, v in dict_scatole.items():
@@ -218,6 +218,10 @@ def best_box(dict_scatole, df_completo):
     out = {
         "scatola_migliore": dict_scatole[punto_max],
         "percentuale_segnale": len(sotto_df[sotto_df["Signal"] == 1.0]) / len(sotto_df),
+        "percentuale_segnale_totale": (
+            len(sotto_df[sotto_df["Signal"] == 1.0])
+            / (len(df_completo) * frazione_segnale_tot)
+        ),
     }
     return out
 
@@ -229,12 +233,15 @@ def ZPL2(Non, Ntot, vol):
     if Non == 0:
         return 0
     else:
-        tau = (1 - vol) / ((vol) + 0.0000001)
+        tau = (1 - vol) / ((vol))
         Noff = Ntot - Non
-        z = np.sqrt(2) * np.sqrt(
-            Non * np.log(((1 + tau)) * Non / (Ntot))
-            + Noff * np.log(Noff * (1 + tau) / (Ntot * tau))
+        valore = (Non * np.log(Non * (1 + tau) / Ntot)) + (
+            Noff * np.log(Noff * (1 + tau) / (Ntot * tau))
         )
+        if valore <= 0:
+            z = 0
+        else:
+            z = np.sqrt(2) * np.sqrt(valore)
         # print(tau)
         if Non < (Noff / tau):
             return -z
@@ -270,8 +277,8 @@ def scatola_iniziale_dist_euclidea(X_smpl, leaf_size):
     pr = a == a.min(0)
     pr_somma = pr.astype(int).sum(1)
     pto_centrale = X_smpl[pr_somma.argmax()].copy()
-    inf_unif = pto_centrale - 0.5 * (1 / np.sqrt(12))
-    sup_unif = pto_centrale + 0.5 * (1 / np.sqrt(12))
+    inf_unif = pto_centrale - 0.1
+    sup_unif = pto_centrale + 0.1
     inf_unif[inf_unif < 0] = 0
     sup_unif[sup_unif > 1] = 1
     Blockmin = inf_unif
@@ -323,23 +330,20 @@ def ZPL_bayesiana(Non, Noff, vol):
 
 def gradient_sequenziale(
     X,
-    numbers_gd_loops,  # non mettere valore troppo alto
-    differenza_ZPL=0.8,
+    number_trials,  # da quanti punti distinti parto
+    numbers_gd_loops,  # quante volte cerco per una determinata scatola
     PCA_opt=False,
     soglia_pca=0.8,
-    step_width=0.2,
-    max_volume_box=0.25,
+    step_width_val=0.15,
+    max_volume_box=0.05,
     epsilon=0.01,
     ZPLtau_alg_orig=True,
-    ZPL_bayes_alg=False,
-    ZPL_unico_alg=False,
     numero_slices=10,
 ):
     # np.random.seed(10)
     out = {}
     if PCA_opt:
         X = PCA_f(X, soglia_pca)
-        print(X.shape[1])
     X_numpy = X.to_numpy()
     Numbers_variables = X_numpy.shape[1]
     goodevents = X_numpy.shape[0]
@@ -347,8 +351,8 @@ def gradient_sequenziale(
     if Numbers_variables <= Number_random_boxes:
         Number_random_boxes = Numbers_variables
     passaggio = 0
-    for gd in range(numbers_gd_loops):
-        print(gd)
+    for ntrial in range(number_trials):
+        print(f"ntrial: {ntrial}")
         # selezione casuale di un sottoinsieme di variabili
         if passaggio == 0:
             subspace_indices = np.random.choice(
@@ -385,7 +389,7 @@ def gradient_sequenziale(
         Blockmin_numpy, Blockmax_numpy, _ = scatola_iniziale_dist_euclidea(
             X_numpy_smpl, leaf_size=4000
         )
-        step_width_tmp = np.zeros([len(subspace_indices), 4], dtype=bool) + step_width
+        step_width = np.zeros([len(subspace_indices), 4]) + step_width_val
         num_events_block = get_num_events(Blockmin_numpy, Blockmax_numpy, X_numpy_smpl)
         # controllo se per caso la scatola iniziale ha troppi pochi eventi all'interno,
         # in caso richiamo la funzione
@@ -400,11 +404,12 @@ def gradient_sequenziale(
                 num_events_block = get_num_events(
                     Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
                 )
-        if differenza_ZPL < 1:
-            differenza = np.ones(4)
-        else:
-            differenza = np.ones(4) + (differenza_ZPL - 0.8)
-        while any(differenza > differenza_ZPL):
+        stop_rule = np.zeros(len(subspace_indices), dtype=bool)
+        for gd in range(numbers_gd_loops):
+            digrad = 0
+            igrad = -1
+            # if gd % 10 == 0:
+            #    print(f"gd loop: {gd}")
             VolumeOrig = (Blockmax_numpy - Blockmin_numpy).prod()
             Sidebands_min, Sidebands_max = sidebands(
                 subspace_indices, Blockmin_numpy, Blockmax_numpy
@@ -416,267 +421,183 @@ def gradient_sequenziale(
                 Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
             )
             # numero eventi solo nelle sidebands
-            num_events_outside_block = get_num_events(
-                Sidebands_min, Sidebands_max, X_numpy_smpl
-            )
-            num_events_sideband = num_events_outside_block - num_events_block
-            # controlli su dove mi posso muovere
-            no_move_min_bound_left = np.zeros(len(subspace_indices), dtype=bool)
-            no_move_max_bound_right = np.zeros(len(subspace_indices), dtype=bool)
-            # controllo quale step puo' essere effettuato in base al volume della box
+            no_step = np.zeros([len(subspace_indices), 4], dtype=bool)
             if VolumeOrig >= max_volume_box:
-                no_move_min_bound_left = np.ones(len(subspace_indices), dtype=bool)
-                no_move_max_bound_right = np.ones(len(subspace_indices), dtype=bool)
-            # e in base all'ampiezza del passo che voglio effettuare
-            no_move_min_bound_right = step_width >= (
+                no_step[:, 0] = np.ones(len(subspace_indices), dtype=bool)
+                no_step[:, 3] = np.ones(len(subspace_indices), dtype=bool)
+            no_step[:, 1] = step_width[:, 1] >= (
                 Blockmax_numpy - Blockmin_numpy - epsilon
             )
-            no_move_max_bound_left = step_width >= (
+            no_step[:, 2] = step_width[:, 2] >= (
                 Blockmax_numpy - Blockmin_numpy - epsilon
             )
-            if (step_width_tmp <= epsilon).all():
-                break
-            # calcolo del multiplier
-            # multiplier = VolumeOrig/np.abs(Blockmax_numpy - Blockmin_numpy)
             # inizializzare bmin e bmax
             bmin = np.zeros([len(subspace_indices), 4])
             bmax = np.ones([len(subspace_indices), 4])
             # inizializzo VolumeMod
             VolumeMod = np.ones([len(subspace_indices), 4])
-            # volume se sposto solo gli estremi inferiori delle variabili a sinistra
+            multiplier = VolumeOrig / (Blockmax_numpy - Blockmin_numpy)
+            # Sposto solo gli estremi inferiori delle variabili a sinistra
             # io nostep lo uso qui e non prima di calcolare Z
-            bmin[:, 0] = Blockmin_numpy - (
-                step_width_tmp[:, 0] * (1 - no_move_min_bound_left)
-            )
+            bmin[:, 0] = Blockmin_numpy - step_width[:, 0]
             bmax[:, 0] = Blockmax_numpy.copy()
             bmin[bmin[:, 0] < 0, 0] = 0
-            # VolumeMod[:,0] = multiplier*np.abs(bmax[:,0] - bmin[:,0])
+            VolumeMod[:, 0] = multiplier * np.abs(bmax[:, 0] - bmin[:, 0])
 
-            # volume se sposto solo gli estremi inferiori delle variabili a destra
-            bmin[:, 1] = Blockmin_numpy + (
-                step_width_tmp[:, 1] * (1 - no_move_min_bound_right)
-            )
+            # Sposto solo gli estremi inferiori delle variabili a destra
+            bmin[:, 1] = Blockmin_numpy + step_width[:, 1]
             bmax[:, 1] = Blockmax_numpy.copy()
             bmin[bmin[:, 1] > (bmax[:, 1] - epsilon), 1] = (
                 bmax[bmin[:, 1] > (bmax[:, 1] - epsilon), 1] - epsilon
             )
-            # VolumeMod[:,1] = multiplier*np.abs(bmax[:,1] - bmin[:,1])
-
-            # volume se sposto solo gli estremi superiori delle variabili a sinistra
-            bmax[:, 2] = Blockmax_numpy - (
-                step_width_tmp[:, 2] * (1 - no_move_max_bound_left)
-            )
+            VolumeMod[:, 1] = multiplier * np.abs(bmax[:, 1] - bmin[:, 1])
+            # Sposto solo gli estremi superiori delle variabili a sinistra
+            bmax[:, 2] = Blockmax_numpy - step_width[:, 2]
             bmin[:, 2] = Blockmin_numpy.copy()
             bmax[bmax[:, 2] < (bmin[:, 2] + epsilon), 2] = (
                 bmin[bmax[:, 2] < (bmin[:, 2] + epsilon), 2] + epsilon
             )
-            # VolumeMod[:,2] = multiplier*np.abs(bmax[:,2] - bmin[:,2])
+            VolumeMod[:, 2] = multiplier * np.abs(bmax[:, 2] - bmin[:, 2])
+            # Sposto solo gli estremi superiori delle variabili a destra
+            bmax[:, 3] = Blockmax_numpy + step_width[:, 3]
 
-            # volume se sposto solo gli estremi superiori delle variabili a destra
-            bmax[:, 3] = Blockmax_numpy + (
-                step_width_tmp[:, 3] * (1 - no_move_max_bound_right)
-            )
             bmin[:, 3] = Blockmin_numpy.copy()
             bmax[bmax[:, 3] > 1, 3] = 1
-            #  VolumeMod[:,3] = multiplier*np.abs(bmax[:,3] - bmin[:,3])
+            VolumeMod[:, 3] = multiplier * np.abs(bmax[:, 3] - bmin[:, 3])
 
             # determinare le sidebands dopo aver effettuato lo spostamento
             smin = np.zeros([len(subspace_indices), 4])
             smax = np.ones([len(subspace_indices), 4])
             excessvol_post_move = np.zeros([len(subspace_indices), 4])
             for i in range(4):
-                smin[:, i] = bmin[:, i] * (1 + sidewidth) - sidewidth * bmax[:, i]
-                smax[:, i] = bmax[:, i] * (1 + sidewidth) - sidewidth * bmin[:, i]
-                smin[smin[:, i] < 0, i] = 0
-                smax[smax[:, i] > 1, i] = 1
+                for k in range(len(subspace_indices)):
+                    smin[k, i] = bmin[k, i] * (1 + sidewidth) - sidewidth * bmax[k, i]
+                    smax[k, i] = bmax[k, i] * (1 + sidewidth) - sidewidth * bmin[k, i]
+                    smin[smin[k, i] < 0, i] = 0
+                    smax[smax[k, i] > 1, i] = 1
+                    excessvol_post_move[k, i] = (
+                        excessvol_pre_move
+                        * (
+                            (bmax[k, i] - bmin[k, i])
+                            / (Blockmax_numpy[k] - Blockmin_numpy[k])
+                        )
+                        / (
+                            (smax[k, i] - smin[k, i])
+                            / (Sidebands_max[k] - Sidebands_min[k])
+                        )
+                    )
             # ZPLtau
-
             if ZPLtau_alg_orig:
-                if num_events_sideband > 0:
-                    Zval_start = ZPLtau(
-                        num_events_block, num_events_sideband, excessvol_pre_move
-                    )
-                else:
-                    Zval_start = ZPL2(num_events_block, goodevents, VolumeOrig)
-                # print(Zval_start)
-                Zval_best = Zval_start
-                ZPL = np.zeros(4)
-                Nin_grad = np.zeros([len(subspace_indices), 4])
-                side_grad = np.zeros([len(subspace_indices), 4])
-                for k in range(len(subspace_indices)):
-                    multiplier = VolumeOrig / (Blockmax_numpy[k] - Blockmin_numpy[k])
-                    for m in range(4):
-                        VolumeMod[k, m] = multiplier * np.abs(bmax[k, m] - bmin[k, m])
-                        excessvol_post_move[k, m] = (
-                            excessvol_pre_move
-                            * (
-                                (bmax[k, m] - bmin[k, m])
-                                / (Blockmax_numpy[k] - Blockmin_numpy[k])
-                            )
-                            / (
-                                (smax[k, m] - smin[k, m])
-                                / (Sidebands_max[k] - Sidebands_min[k])
-                            )
-                        )
-                        Block_min_tmp = Blockmin_numpy.copy()
-                        Block_max_tmp = Blockmax_numpy.copy()
-                        Block_min_tmp[k] = bmin[k, m]
-                        Block_min_tmp[k] = bmax[k, m]
-                        Side_min_tmp = Sidebands_min.copy()
-                        Side_max_tmp = Sidebands_max.copy()
-                        Side_min_tmp[k] = smin[k, m]
-                        Side_max_tmp[k] = smax[k, m]
-                        Nin_grad[k, m] = get_num_events(
-                            Block_min_tmp, Block_max_tmp, X_numpy_smpl
-                        )
-                        side_grad[k, m] = (
-                            get_num_events(Side_min_tmp, Side_max_tmp, X_numpy_smpl)
-                            - Nin_grad[k, m]
-                        )
-                        if side_grad[k, m] > 0:
-                            ZPL[m] = ZPLtau(
-                                Nin_grad[k, m],
-                                side_grad[k, m],
-                                excessvol_post_move[k, m],
-                            )
-                        else:
-                            ZPL[m] = ZPL2(Nin_grad[k, m], goodevents, VolumeMod[k, m])
-                        if ZPL[m] > Zval_best:
-                            differenza[m] = ZPL[m] - Zval_best
-                            Zval_best = ZPL[m]
-                            Blockmin_numpy[k] = bmin[k, m].copy()
-                            Blockmax_numpy[k] = bmax[k, m].copy()
-                            #    Sidebands_min[k] = smin[k,m].copy()
-                            #    Sidebands_max[k] = smax[k,m].copy()
-                            #    print("Blockmin_numpy in if", Blockmin_numpy)
-                            # aggiornamento dei valori di step_width di epsilon
-                            step_width_tmp[k, m] = step_width_tmp[k, m] - epsilon
-                            if step_width_tmp[k, m] < epsilon:
-                                step_width_tmp[k, m] = epsilon
-                        else:
-                            differenza[m] = 0
-
-            if ZPL_bayes_alg:
-                if num_events_sideband > 0:
-                    Zval_start = ZPL_bayesiana(
-                        num_events_block, num_events_sideband, VolumeOrig
-                    )
-                else:
-                    Zval_start = ZPL2(num_events_block, goodevents, VolumeOrig)
-                # print(Zval_start)
-                Zval_best = Zval_start
-                ZPL = np.zeros(4)
-                Nin_grad = np.zeros([len(subspace_indices), 4])
-                side_grad = np.zeros([len(subspace_indices), 4])
-                for k in range(len(subspace_indices)):
-                    multiplier = VolumeOrig / (Blockmax_numpy[k] - Blockmin_numpy[k])
-                    for m in range(4):
-                        VolumeMod[k, m] = multiplier * np.abs(bmax[k, m] - bmin[k, m])
-                        excessvol_post_move[k, m] = (
-                            excessvol_pre_move
-                            * (
-                                (bmax[k, m] - bmin[k, m])
-                                / (Blockmax_numpy[k] - Blockmin_numpy[k])
-                            )
-                            / (
-                                (smax[k, m] - smin[k, m])
-                                / (Sidebands_max[k] - Sidebands_min[k])
-                            )
-                        )
-                        Block_min_tmp = Blockmin_numpy.copy()
-                        Block_max_tmp = Blockmax_numpy.copy()
-                        Block_min_tmp[k] = bmin[k, m]
-                        Block_min_tmp[k] = bmax[k, m]
-                        Side_min_tmp = Sidebands_min.copy()
-                        Side_max_tmp = Sidebands_max.copy()
-                        Side_min_tmp[k] = smin[k, m]
-                        Side_max_tmp[k] = smax[k, m]
-                        Nin_grad[k, m] = get_num_events(
-                            Block_min_tmp, Block_max_tmp, X_numpy_smpl
-                        )
-                        side_grad[k, m] = (
-                            get_num_events(Side_min_tmp, Side_max_tmp, X_numpy_smpl)
-                            - Nin_grad[k, m]
-                        )
-                        if side_grad[k, m] > 0:
-                            ZPL[m] = ZPL_bayesiana(
-                                Nin_grad[k, m], side_grad[k, m], VolumeMod[k, m],
-                            )
-                        else:
-                            ZPL[m] = ZPL2(Nin_grad[k, m], goodevents, VolumeMod[k, m])
-                        if ZPL[m] > Zval_best:
-                            differenza[m] = ZPL[m] - Zval_best
-                            Zval_best = ZPL[m]
-                            Blockmin_numpy[k] = bmin[k, m].copy()
-                            Blockmax_numpy[k] = bmax[k, m].copy()
-                            #    Sidebands_min[k] = smin[k,m].copy()
-                            #    Sidebands_max[k] = smax[k,m].copy()
-                            #    print("Blockmin_numpy in if", Blockmin_numpy)
-                            # aggiornamento dei valori di step_width di epsilon
-                            step_width_tmp[k, m] = step_width_tmp[k, m] - epsilon
-                            if step_width_tmp[k, m] < epsilon:
-                                step_width_tmp[k, m] = epsilon
-                        else:
-                            differenza[m] = 0
-            if ZPL_unico_alg:
+                # if num_events_sideband > 0:
+                #    Zval_start = ZPLtau(
+                #        num_events_block, num_events_sideband, excessvol_pre_move
+                #    )
+                # else:
                 Zval_start = ZPL2(num_events_block, goodevents, VolumeOrig)
+                # print(Zval_start)
                 Zval_best = Zval_start
                 ZPL = np.zeros(4)
                 Nin_grad = np.zeros([len(subspace_indices), 4])
+                side_grad = np.zeros([len(subspace_indices), 4])
+
                 for k in range(len(subspace_indices)):
-                    multiplier = VolumeOrig / (Blockmax_numpy[k] - Blockmin_numpy[k])
+                    if stop_rule[k]:
+                        continue
                     for m in range(4):
-                        VolumeMod[k, m] = multiplier * np.abs(bmax[k, m] - bmin[k, m])
-                        excessvol_post_move[k, m] = (
-                            excessvol_pre_move
-                            * (
-                                (bmax[k, m] - bmin[k, m])
-                                / (Blockmax_numpy[k] - Blockmin_numpy[k])
+                        if not no_step[k, m]:
+                            Block_min_tmp = Blockmin_numpy.copy()
+                            Block_max_tmp = Blockmax_numpy.copy()
+                            Block_min_tmp[k] = bmin[k, m]
+                            Block_max_tmp[k] = bmax[k, m]
+                            Side_min_tmp = Sidebands_min.copy()
+                            Side_max_tmp = Sidebands_max.copy()
+                            Side_min_tmp[k] = smin[k, m]
+                            Side_max_tmp[k] = smax[k, m]
+                            Nin_grad[k, m] = get_num_events(
+                                Block_min_tmp, Block_max_tmp, X_numpy_smpl
                             )
-                            / (
-                                (smax[k, m] - smin[k, m])
-                                / (Sidebands_max[k] - Sidebands_min[k])
+                            side_grad[k, m] = (
+                                get_num_events(Side_min_tmp, Side_max_tmp, X_numpy_smpl)
+                                - Nin_grad[k, m]
                             )
-                        )
-                        Block_min_tmp = Blockmin_numpy.copy()
-                        Block_max_tmp = Blockmax_numpy.copy()
-                        Block_min_tmp[k] = bmin[k, m]
-                        Block_min_tmp[k] = bmax[k, m]
-                        Side_min_tmp = Sidebands_min.copy()
-                        Side_max_tmp = Sidebands_max.copy()
-                        Side_min_tmp[k] = smin[k, m]
-                        Side_max_tmp[k] = smax[k, m]
-                        Nin_grad[k, m] = get_num_events(
-                            Block_min_tmp, Block_max_tmp, X_numpy_smpl
-                        )
-                        ZPL[m] = ZPL2(Nin_grad[k, m], goodevents, VolumeMod[k, m])
-                        if ZPL[m] > Zval_best:
-                            differenza[m] = ZPL[m] - Zval_best
-                            Zval_best = ZPL[m]
-                            Blockmin_numpy[k] = bmin[k, m].copy()
-                            Blockmax_numpy[k] = bmax[k, m].copy()
-                            step_width_tmp[k, m] = step_width_tmp[k, m] - epsilon
-                            if step_width_tmp[k, m] < epsilon:
-                                step_width_tmp[k, m] = epsilon
+                            # if side_grad[k, m] > 0:
+                            #    ZPL[m] = ZPLtau(
+                            #        Nin_grad[k, m],
+                            #     side_grad[k, m],
+                            #        excessvol_post_move[k, m],
+                            #    )
+                            # else:
+                            # print(VolumeMod[k, m])
+                            ZPL[m] = ZPL2(Nin_grad[k, m], goodevents, VolumeMod[k, m])
+                            if ZPL[m] > Zval_best:
+                                # differenza[m] = ZPL[m] - Zval_best
+                                # print(f"m: {m}")
+                                # print(f"differenza m: {differenza[m]}")
+                                Zval_best = ZPL[m]
+                                digrad = m
+                                igrad = k
+                if igrad == -1:
+                    for k in range(len(subspace_indices)):
+                        for m in range(4):
+                            step_width[k, m] = step_width[k, m] - epsilon
+                            if step_width[k, m] < epsilon:
+                                step_width[k, m] = epsilon
+                            if all(step_width[k, :] <= epsilon):
+                                stop_rule[k] = True
+                else:
+                    Blockmin_numpy[igrad] = bmin[igrad, digrad]
+                    Blockmax_numpy[igrad] = bmax[igrad, digrad]
+                    Sidebands_min[igrad] = smin[igrad, digrad]
+                    Sidebands_max[igrad] = smax[igrad, digrad]
+                    for m in range(4):
+                        if m != digrad:
+                            step_width[k, m] = 0.8 * step_width[k, m]
+
+                    if digrad == 0:
+                        if Blockmin_numpy[0] > 0:
+                            step_width[igrad, 0] = step_width[igrad, 0] * 1.5
+                            if step_width[igrad, 0] > Blockmin_numpy[igrad]:
+                                step_width[igrad, 0] = Blockmin_numpy[igrad]
                         else:
-                            differenza[m] = 0
+                            step_width[igrad, 0] = epsilon
+                    if digrad == 1 or digrad == 2:
+                        if Blockmax_numpy[igrad] - Blockmin_numpy[igrad] > epsilon:
+                            step_width[igrad, digrad] = step_width[igrad, digrad] * 1.5
+                            if step_width[igrad, digrad] > (
+                                Blockmax_numpy[igrad] - Blockmin_numpy[igrad] - epsilon
+                            ):
+                                step_width[igrad, digrad] = (
+                                    Blockmax_numpy[igrad]
+                                    - Blockmin_numpy[igrad]
+                                    - epsilon
+                                )
+                        else:
+                            step_width[igrad, 0] = epsilon
+                    if digrad == 3:
+                        if Blockmax_numpy[igrad] < 1:
+                            step_width[igrad, 3] = step_width[igrad, 3] * 1.5
+                            if step_width[igrad, 3] > (1 - Blockmax_numpy[igrad]):
+                                step_width[igrad, 3] = 1 - Blockmax_numpy[igrad]
+                        else:
+                            step_width[igrad, 3] = epsilon
 
-            # calcolo qta' per output
+        # calcolo qta' per output
 
-            included_points = get_included_points_indices_subspace(
-                Blockmin_numpy, Blockmax_numpy, subspace_indices, X_numpy
-            )
-            num_events_block_last = get_num_events(
-                Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
-            )
-            best_box_volume = (Blockmax_numpy - Blockmin_numpy).prod()
-            best_sidebands_min, best_sidebands_max = sidebands(
-                subspace_indices, Blockmin_numpy, Blockmax_numpy
-            )
-            best_VolumeSidebands = (best_sidebands_max - best_sidebands_min).prod()
-            migliore_Z = Zval_best
-            # stampare num eventi sidebands
-        out[gd] = {
+        included_points = get_included_points_indices_subspace(
+            Blockmin_numpy, Blockmax_numpy, subspace_indices, X_numpy
+        )
+        num_events_block_last = get_num_events(
+            Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
+        )
+        best_box_volume = (Blockmax_numpy - Blockmin_numpy).prod()
+        best_sidebands_min, best_sidebands_max = sidebands(
+            subspace_indices, Blockmin_numpy, Blockmax_numpy
+        )
+        best_VolumeSidebands = (best_sidebands_max - best_sidebands_min).prod()
+        migliore_Z = Zval_best
+
+        # stampare num eventi sidebands
+        out[ntrial] = {
             "box_volume": best_box_volume,
             "box_vol_sidebands": best_VolumeSidebands,
             "box_IN": num_events_block_last,
@@ -691,7 +612,7 @@ def gradient_sequenziale(
 
 if __name__ == "__main__":
 
-    df = creazione_df(10000, 20, 15, np.array([0.01, 0.1]), 0.98)
+    df = creazione_df(10000, 20, 15, np.array([0.01, 0.1]), 0.99)
     # df = pd.read_csv(r"dati_generati_tmp.csv.csv")
     X = df.loc[:, df.columns != "Signal"]
     X_array = X.values
@@ -702,16 +623,16 @@ if __name__ == "__main__":
 
     prova_start_time = time.perf_counter()
     prova = gradient_sequenziale(
-        numbers_gd_loops=800,  # non troppi
-        differenza_ZPL=0.1,
+        number_trials=1000,
+        numbers_gd_loops=1000,
         soglia_pca=0.8,
+        step_width_val=0.2,
+        max_volume_box=0.25,
         X=X_df_trasf,
         PCA_opt=False,
         ZPLtau_alg_orig=True,
-        ZPL_bayes_alg=False,
-        ZPL_unico_alg=False,
         numero_slices=10,
     )
     prova_time = time.perf_counter() - prova_start_time
-    print(best_box(prova, df), file=open("output.txt", "a"))
+    print(best_box(prova, df, 0.01), file=open("output.txt", "a"))
     print(prova_time)
