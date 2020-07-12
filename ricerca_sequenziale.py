@@ -215,14 +215,24 @@ def best_box(dict_scatole, df_completo, frazione_segnale_tot):
         ris[k] = (k, v["box_ZPLtau"])
     punto_max = np.argmax(ris, axis=0)[1]
     sotto_df = df_completo.loc[dict_scatole[punto_max]["included_points"], :]
-    out = {
-        "scatola_migliore": dict_scatole[punto_max],
-        "percentuale_segnale": len(sotto_df[sotto_df["Signal"] == 1.0]) / len(sotto_df),
-        "percentuale_segnale_totale": (
-            len(sotto_df[sotto_df["Signal"] == 1.0])
-            / (len(df_completo) * frazione_segnale_tot)
-        ),
-    }
+    if len(sotto_df) > 0:
+        out = {
+            "scatola_migliore": dict_scatole[punto_max],
+            "percentuale_segnale": len(sotto_df[sotto_df["Signal"] == 1.0])
+            / len(sotto_df),
+            "percentuale_segnale_totale": (
+                len(sotto_df[sotto_df["Signal"] == 1.0])
+                / (len(df_completo) * frazione_segnale_tot)
+            ),
+        }
+    else:
+        out = {
+            "scatola_migliore": dict_scatole[punto_max],
+            "percentuale_segnale_totale": (
+                len(sotto_df[sotto_df["Signal"] == 1.0])
+                / (len(df_completo) * frazione_segnale_tot)
+            ),
+        }
     return out
 
 
@@ -302,19 +312,23 @@ def scatola_iniziale_dist_euclidea(X_smpl, leaf_size):
 # In[22]:
 
 
-def ZPL_bayesiana(Non, Noff, vol):
-    alpha = (1 - vol) / (vol)
+def ZPL_bayesiana(Non, Ntot, vol):
+    if Non == 0:
+        return 0
+    else:
+        Noff = Ntot - Non
+        alpha = (1 - vol) / (vol)
 
-    def B_01(Non, Noff, alpha):
-        Ntot = Non + Noff
-        gam = (1 + 2 * Noff) * power(alpha, (0.5 + Ntot)) * gamma(0.5 + Ntot)
-        delta = (
-            (2 * power((1 + alpha), Ntot))
-            * gamma(1 + Ntot)
-            * hyp2f1(0.5 + Noff, 1 + Ntot, 1.5 + Noff, (-1 / alpha))
-        )
-        c1_c2 = sqrt(pi) / (2 * atan(1 / sqrt(alpha)))
-        return gam / (c1_c2 * delta)
+        def B_01(Non, Noff, alpha):
+            Ntot = Non + Noff
+            gam = (1 + 2 * Noff) * power(alpha, (0.5 + Ntot)) * gamma(0.5 + Ntot)
+            delta = (
+                (2 * power((1 + alpha), Ntot))
+                * gamma(1 + Ntot)
+                * hyp2f1(0.5 + Noff, 1 + Ntot, 1.5 + Noff, (-1 / alpha))
+            )
+            c1_c2 = sqrt(pi) / (2 * atan(1 / sqrt(alpha)))
+            return gam / (c1_c2 * delta)
 
     buf = 1 - B_01(Non, Noff, alpha)
     if buf < -1.0:
@@ -354,33 +368,40 @@ def gradient_sequenziale(
     for ntrial in range(number_trials):
         print(f"ntrial: {ntrial}")
         # selezione casuale di un sottoinsieme di variabili
-        if passaggio == 0:
+        if Number_random_boxes >= 6:
+            if passaggio == 0:
+                subspace_indices = np.random.choice(
+                    Numbers_variables, size=Number_random_boxes, replace=False
+                )
+            else:  # uso le tre variabili più promettenti tra quelle già selezionate
+                # e le altre le seleziono a caso
+                intervalli = np.linspace(start=0, stop=1, num=numero_slices)
+                num_eventi_variabile_univariata = np.zeros(
+                    [len(subspace_indices), numero_slices - 1]
+                )
+                for kk in range(len(subspace_indices)):
+                    for k_int in range(len(intervalli) - 1):
+                        num_eventi_variabile_univariata[kk, k_int] = get_num_events(
+                            intervalli[k_int],
+                            intervalli[k_int + 1],
+                            X_numpy[:, subspace_indices[kk]].reshape(
+                                (X_numpy.shape[0], 1)
+                            ),
+                        )
+                vettore_max = np.max(num_eventi_variabile_univariata, axis=1)
+                indici_ordinati = np.argsort(-1 * vettore_max, axis=0)
+                subspace_indices[0:3] = indici_ordinati[0:3]
+                var_non_usabili = subspace_indices[0:3]
+                tot_var = np.arange(X_numpy.shape[1])
+                possibili_indici = np.setxor1d(tot_var, var_non_usabili)
+                subspace_indices[3:6] = np.random.choice(
+                    possibili_indici, size=3, replace=False
+                )
+            passaggio += 1
+        else:
             subspace_indices = np.random.choice(
                 Numbers_variables, size=Number_random_boxes, replace=False
             )
-        else:  # uso le tre variabili più promettenti tra quelle già selezionate
-            # e le altre le seleziono a caso
-            intervalli = np.linspace(start=0, stop=1, num=numero_slices)
-            num_eventi_variabile_univariata = np.zeros(
-                [len(subspace_indices), numero_slices - 1]
-            )
-            for kk in range(len(subspace_indices)):
-                for k_int in range(len(intervalli) - 1):
-                    num_eventi_variabile_univariata[kk, k_int] = get_num_events(
-                        intervalli[k_int],
-                        intervalli[k_int + 1],
-                        X_numpy[:, subspace_indices[kk]].reshape((X_numpy.shape[0], 1)),
-                    )
-            vettore_max = np.max(num_eventi_variabile_univariata, axis=1)
-            indici_ordinati = np.argsort(-1 * vettore_max, axis=0)
-            subspace_indices[0:3] = indici_ordinati[0:3]
-            var_non_usabili = subspace_indices[0:3]
-            tot_var = np.arange(X_numpy.shape[1])
-            possibili_indici = np.setxor1d(tot_var, var_non_usabili)
-            subspace_indices[3:6] = np.random.choice(
-                possibili_indici, size=3, replace=False
-            )
-        passaggio += 1
         sidewidth = 0.5 * (2 ** (1 / Number_random_boxes) - 1)
         X_numpy_smpl = X_numpy[:, subspace_indices]
         #  inizializzazione della prima scatola
@@ -393,8 +414,8 @@ def gradient_sequenziale(
         num_events_block = get_num_events(Blockmin_numpy, Blockmax_numpy, X_numpy_smpl)
         # controllo se per caso la scatola iniziale ha troppi pochi eventi all'interno,
         # in caso richiamo la funzione
-        if num_events_block < 1:
-            while num_events_block > 1:
+        if num_events_block <= 1:
+            while num_events_block <= 1:
                 subspace_indices = np.random.choice(
                     Numbers_variables, size=Number_random_boxes, replace=False
                 )
@@ -414,8 +435,6 @@ def gradient_sequenziale(
             Sidebands_min, Sidebands_max = sidebands(
                 subspace_indices, Blockmin_numpy, Blockmax_numpy
             )
-            VolumeSidebands = (Sidebands_max - Sidebands_min).prod()
-            excessvol_pre_move = 2 * VolumeOrig / VolumeSidebands
             # numero eventi contenuti nella scatola
             num_events_block = get_num_events(
                 Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
@@ -468,118 +487,87 @@ def gradient_sequenziale(
             # determinare le sidebands dopo aver effettuato lo spostamento
             smin = np.zeros([len(subspace_indices), 4])
             smax = np.ones([len(subspace_indices), 4])
-            excessvol_post_move = np.zeros([len(subspace_indices), 4])
             for i in range(4):
                 for k in range(len(subspace_indices)):
                     smin[k, i] = bmin[k, i] * (1 + sidewidth) - sidewidth * bmax[k, i]
                     smax[k, i] = bmax[k, i] * (1 + sidewidth) - sidewidth * bmin[k, i]
-                    smin[smin[k, i] < 0, i] = 0
-                    smax[smax[k, i] > 1, i] = 1
-                    excessvol_post_move[k, i] = (
-                        excessvol_pre_move
-                        * (
-                            (bmax[k, i] - bmin[k, i])
-                            / (Blockmax_numpy[k] - Blockmin_numpy[k])
-                        )
-                        / (
-                            (smax[k, i] - smin[k, i])
-                            / (Sidebands_max[k] - Sidebands_min[k])
-                        )
-                    )
+                    smin[smin[k, i] < 0] = 0
+                    smax[smax[k, i] > 1] = 1
             # ZPLtau
-            if ZPLtau_alg_orig:
-                # if num_events_sideband > 0:
-                #    Zval_start = ZPLtau(
-                #        num_events_block, num_events_sideband, excessvol_pre_move
-                #    )
-                # else:
-                Zval_start = ZPL2(num_events_block, goodevents, VolumeOrig)
-                # print(Zval_start)
-                Zval_best = Zval_start
-                ZPL = np.zeros(4)
-                Nin_grad = np.zeros([len(subspace_indices), 4])
-                side_grad = np.zeros([len(subspace_indices), 4])
+            Zval_start = ZPL2(num_events_block, goodevents, VolumeOrig)
+            Zval_best = Zval_start
+            ZPL = np.zeros(4)
+            Nin_grad = np.zeros([len(subspace_indices), 4])
+            side_grad = np.zeros([len(subspace_indices), 4])
 
+            for k in range(len(subspace_indices)):
+                if stop_rule[k]:
+                    continue
+                for m in range(4):
+                    if not no_step[k, m]:
+                        Block_min_tmp = Blockmin_numpy.copy()
+                        Block_max_tmp = Blockmax_numpy.copy()
+                        Block_min_tmp[k] = bmin[k, m]
+                        Block_max_tmp[k] = bmax[k, m]
+                        Side_min_tmp = Sidebands_min.copy()
+                        Side_max_tmp = Sidebands_max.copy()
+                        Side_min_tmp[k] = smin[k, m]
+                        Side_max_tmp[k] = smax[k, m]
+                        Nin_grad[k, m] = get_num_events(
+                            Block_min_tmp, Block_max_tmp, X_numpy_smpl
+                        )
+                        side_grad[k, m] = (
+                            get_num_events(Side_min_tmp, Side_max_tmp, X_numpy_smpl)
+                            - Nin_grad[k, m]
+                        )
+                        ZPL[m] = ZPL2(Nin_grad[k, m], goodevents, VolumeMod[k, m])
+                        if ZPL[m] > Zval_best:
+                            Zval_best = ZPL[m]
+                            digrad = m
+                            igrad = k
+
+            if igrad == -1:
                 for k in range(len(subspace_indices)):
-                    if stop_rule[k]:
-                        continue
                     for m in range(4):
-                        if not no_step[k, m]:
-                            Block_min_tmp = Blockmin_numpy.copy()
-                            Block_max_tmp = Blockmax_numpy.copy()
-                            Block_min_tmp[k] = bmin[k, m]
-                            Block_max_tmp[k] = bmax[k, m]
-                            Side_min_tmp = Sidebands_min.copy()
-                            Side_max_tmp = Sidebands_max.copy()
-                            Side_min_tmp[k] = smin[k, m]
-                            Side_max_tmp[k] = smax[k, m]
-                            Nin_grad[k, m] = get_num_events(
-                                Block_min_tmp, Block_max_tmp, X_numpy_smpl
-                            )
-                            side_grad[k, m] = (
-                                get_num_events(Side_min_tmp, Side_max_tmp, X_numpy_smpl)
-                                - Nin_grad[k, m]
-                            )
-                            # if side_grad[k, m] > 0:
-                            #    ZPL[m] = ZPLtau(
-                            #        Nin_grad[k, m],
-                            #     side_grad[k, m],
-                            #        excessvol_post_move[k, m],
-                            #    )
-                            # else:
-                            # print(VolumeMod[k, m])
-                            ZPL[m] = ZPL2(Nin_grad[k, m], goodevents, VolumeMod[k, m])
-                            if ZPL[m] > Zval_best:
-                                # differenza[m] = ZPL[m] - Zval_best
-                                # print(f"m: {m}")
-                                # print(f"differenza m: {differenza[m]}")
-                                Zval_best = ZPL[m]
-                                digrad = m
-                                igrad = k
-                if igrad == -1:
-                    for k in range(len(subspace_indices)):
-                        for m in range(4):
-                            step_width[k, m] = step_width[k, m] - epsilon
-                            if step_width[k, m] < epsilon:
-                                step_width[k, m] = epsilon
-                            if all(step_width[k, :] <= epsilon):
-                                stop_rule[k] = True
-                else:
-                    Blockmin_numpy[igrad] = bmin[igrad, digrad]
-                    Blockmax_numpy[igrad] = bmax[igrad, digrad]
-                    Sidebands_min[igrad] = smin[igrad, digrad]
-                    Sidebands_max[igrad] = smax[igrad, digrad]
-                    for m in range(4):
-                        if m != digrad:
-                            step_width[k, m] = 0.8 * step_width[k, m]
+                        step_width[k, m] = step_width[k, m] - epsilon
+                        if step_width[k, m] < epsilon:
+                            step_width[k, m] = epsilon
+                        if all(step_width[k, :] <= epsilon):
+                            stop_rule[k] = True
+            else:
+                Blockmin_numpy[igrad] = bmin[igrad, digrad]
+                Blockmax_numpy[igrad] = bmax[igrad, digrad]
+                Sidebands_min[igrad] = smin[igrad, digrad]
+                Sidebands_max[igrad] = smax[igrad, digrad]
+                for m in range(4):
+                    if m != digrad:
+                        step_width[k, m] = 0.8 * step_width[k, m]
 
-                    if digrad == 0:
-                        if Blockmin_numpy[0] > 0:
-                            step_width[igrad, 0] = step_width[igrad, 0] * 1.5
-                            if step_width[igrad, 0] > Blockmin_numpy[igrad]:
-                                step_width[igrad, 0] = Blockmin_numpy[igrad]
-                        else:
-                            step_width[igrad, 0] = epsilon
-                    if digrad == 1 or digrad == 2:
-                        if Blockmax_numpy[igrad] - Blockmin_numpy[igrad] > epsilon:
-                            step_width[igrad, digrad] = step_width[igrad, digrad] * 1.5
-                            if step_width[igrad, digrad] > (
+                if digrad == 0:
+                    if Blockmin_numpy[0] > 0:
+                        step_width[igrad, 0] = step_width[igrad, 0] * 1.5
+                        if step_width[igrad, 0] > Blockmin_numpy[igrad]:
+                            step_width[igrad, 0] = Blockmin_numpy[igrad]
+                    else:
+                        step_width[igrad, 0] = epsilon
+                if digrad == 1 or digrad == 2:
+                    if Blockmax_numpy[igrad] - Blockmin_numpy[igrad] > epsilon:
+                        step_width[igrad, digrad] = step_width[igrad, digrad] * 1.5
+                        if step_width[igrad, digrad] > (
+                            Blockmax_numpy[igrad] - Blockmin_numpy[igrad] - epsilon
+                        ):
+                            step_width[igrad, digrad] = (
                                 Blockmax_numpy[igrad] - Blockmin_numpy[igrad] - epsilon
-                            ):
-                                step_width[igrad, digrad] = (
-                                    Blockmax_numpy[igrad]
-                                    - Blockmin_numpy[igrad]
-                                    - epsilon
-                                )
-                        else:
-                            step_width[igrad, 0] = epsilon
-                    if digrad == 3:
-                        if Blockmax_numpy[igrad] < 1:
-                            step_width[igrad, 3] = step_width[igrad, 3] * 1.5
-                            if step_width[igrad, 3] > (1 - Blockmax_numpy[igrad]):
-                                step_width[igrad, 3] = 1 - Blockmax_numpy[igrad]
-                        else:
-                            step_width[igrad, 3] = epsilon
+                            )
+                    else:
+                        step_width[igrad, 0] = epsilon
+                if digrad == 3:
+                    if Blockmax_numpy[igrad] < 1:
+                        step_width[igrad, 3] = step_width[igrad, 3] * 1.5
+                        if step_width[igrad, 3] > (1 - Blockmax_numpy[igrad]):
+                            step_width[igrad, 3] = 1 - Blockmax_numpy[igrad]
+                    else:
+                        step_width[igrad, 3] = epsilon
 
         # calcolo qta' per output
 
@@ -612,8 +600,8 @@ def gradient_sequenziale(
 
 if __name__ == "__main__":
 
-    df = creazione_df(10000, 20, 15, np.array([0.01, 0.1]), 0.99)
-    # df = pd.read_csv(r"dati_generati_tmp.csv.csv")
+    df = creazione_df(10000, 20, 15, np.array([0.01, 0.1]), 0.999)
+    # df = pd.read_csv(r"dati_generati/dati_frodi_def_1perc.csv")
     X = df.loc[:, df.columns != "Signal"]
     X_array = X.values
 
@@ -625,14 +613,17 @@ if __name__ == "__main__":
     prova = gradient_sequenziale(
         number_trials=1000,
         numbers_gd_loops=1000,
-        soglia_pca=0.8,
+        soglia_pca=0.98,
         step_width_val=0.2,
         max_volume_box=0.25,
         X=X_df_trasf,
         PCA_opt=False,
-        ZPLtau_alg_orig=True,
+        ZPLtau_alg_orig=False,
         numero_slices=10,
     )
     prova_time = time.perf_counter() - prova_start_time
     print(best_box(prova, df, 0.01), file=open("output.txt", "a"))
     print(prova_time)
+
+
+# %%
