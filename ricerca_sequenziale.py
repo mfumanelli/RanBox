@@ -3,23 +3,28 @@ from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.neighbors import KDTree
-from mpmath import (
-    sqrt,
-    pi,
-    atan,
-    hyp2f1,
-    gamma,
-    erfinv,
-    power,
-)
 import time
 from sklearn.decomposition import PCA
 import random
+import math
+from sklearn.preprocessing import StandardScaler
 
 plt.style.use("ggplot")
 
 
 def creazione_df(nobs, nvar, dim_segnale, sigmas, flat_frac):
+    """Genera un insieme di dati uniformi con all'interno di certe variabili
+    per alcune osservazioni del segnale gaussiano
+    Inputs:
+    nobs -- il numero di righe dell'insieme di dati che genera
+    nvar -- il numero di colonne dell'insieme di dati che genera
+    dim_segnale -- il numero di variabili per cui il segnale e' presente
+    sigmas -- la deviazione standard della variabile casuale normale da
+    cui si genera il segnale
+    flat_frac -- la frazione di osservazioni che non presenta segnale
+    Outputs:
+    df -- l'insieme di dati generato
+    """
     sigma = np.random.uniform(sigmas[0], sigmas[1], dim_segnale)
     mean = np.random.uniform(3 * sigma, 1 - (3 * sigma))
     gauss_indices = random.sample(range(1, nvar), dim_segnale)
@@ -43,16 +48,13 @@ def creazione_df(nobs, nvar, dim_segnale, sigmas, flat_frac):
 
 
 def ecdf(x_i, npoints):
-    """Generates an Empirical CDF using the indicator function.
-
+    """Genera una funzione empirica utilizzando la funzione indicatrice.
     Inputs:
-    x_i -- the input data set, should be a numpy array
-    npoints -- the number of desired points in the empirical CDF estimate
-
+    x_i -- l'insieme di dati di input, deve essere un numpy array
+    npoints -- il numero di punti desiderati nella stima della CDF empirica
     Outputs:
-    y -- the empirical CDF
+    y -- la CDF empirica
     """
-    # define the points over which we will generate the kernel density estimate
     x = np.linspace(min(x_i), max(x_i), npoints)
     n = float(x_i.size)
     y = np.zeros(npoints)
@@ -65,15 +67,12 @@ def ecdf(x_i, npoints):
 
 
 def kde_integral(kde):
-    """Generates a "smoother" Empirical CDF by integrating the KDE.  For this,
-        the user should first generate the KDE using kde.py, and then pass the
-        density estimate to this function
-
+    """Genera una funzione di ripartizione empirica più "liscia" utilizzando
+    la stima della densità del kernel (KDE).
         Inputs:
-        kde -- the kernel density estimate
-
+        kde -- stima della densità del kernel
         Outputs:
-        y -- the smoothed CDF estimate
+        y -- la stima della funzione di ripartizione empirica più "liscia"
     """
     y = np.cumsum(kde) / sum(kde)
 
@@ -82,23 +81,19 @@ def kde_integral(kde):
 
 def probability_integral_transform(X):
     """
-    Takes a data array X of dimension [M x N], and converts it to a uniform
-    random variable using the probability integral transform, U = F(X)
+    Prende un array di dati X di dimensione [M x N] e lo converte in una variabile
+    casuale uniforme usando la trasformazione integrale di probabilità, U = F(X)
     """
     M = X.shape[0]
     N = X.shape[1]
 
-    # convert X to U by using the probability integral transform:  F(X) = U
     U = np.empty(X.shape)
     for ii in range(0, N):
         x_ii = X[:, ii]
 
-        # estimate the empirical cdf
         (xx, pp) = ecdf(x_ii, M)
-        f = interp1d(xx, pp)  # TODO: experiment w/ different kinds of interpolation?
-        # for example, cubic, or spline etc...?
+        f = interp1d(xx, pp)
 
-        # plug this RV sample into the empirical cdf to get uniform RV
         u_ii = f(x_ii)
         U[:, ii] = u_ii
 
@@ -106,6 +101,17 @@ def probability_integral_transform(X):
 
 
 def random_box_subspace(NVar, NRanBox, eps=0.01):
+    """Definisce in modo casuale una scatola.
+    Inputs:
+    NVar -- il numero di variabili a disposizione
+    NRanBox -- il numero di variabili per cui si vuole che il lato della scatola venga
+    inizializzato con estremi casuali
+    eps -- numero piccolo che serve unicamente per degli arrotondamenti
+    Outputs:
+    Blockmin -- vettore con estremi inferiori dei lati della scatola
+    Blockmax -- vettore con estremi superiori dei lati della scatola
+    VolumeOrig -- volume della scatola
+    """
     bmin = eps * (np.random.uniform(size=NVar) / eps).astype(np.int32)
     bmax = eps * (np.random.uniform(size=NVar) / eps).astype(np.int32)
     is_random = np.random.uniform(size=NVar) < (NRanBox / NVar)
@@ -114,7 +120,6 @@ def random_box_subspace(NVar, NRanBox, eps=0.01):
     Blockmin = np.min([bmin, bmax], axis=0)
     Blockmax = np.max([bmin, bmax], axis=0)
     VolumeOrig = np.cumprod(Blockmax - Blockmin)
-    # first_idx_not_valid = np.argmax((VolumeOrig * goodevents) < 1)
     first_idx_not_valid = np.argmax(VolumeOrig < 0.001)
     Blockmin[(first_idx_not_valid - 1) :] = 0
     Blockmax[(first_idx_not_valid - 1) :] = 1
@@ -123,10 +128,18 @@ def random_box_subspace(NVar, NRanBox, eps=0.01):
     return Blockmin, Blockmax, VolumeOrig[first_idx_not_valid - 1]
 
 
-# In[12]:
-
-
 def get_included_points_indices_subspace(min_lims, max_lims, subspace_indices, X):
+    """Restituisce gli indici di riga delle osservazioni contenute
+    in una specifica scatola.
+    Inputs:
+    min_lims -- vettore con estremi inferiori dei lati della scatola
+    max_lims -- vettore con estremi superiori dei lati della scatola
+    subspace_indices -- indici delle k variabili per cui si stanno
+    facendo variare gli estremi dei lati
+    X -- l'insieme di dati come numpy array
+    Outputs:
+    index -- gli indici delle osservazioni contenute nella scatola
+    """
     index = np.arange(len(X))
     for k in range(len(subspace_indices)):
         var_k = X[index, :][:, subspace_indices[k]]
@@ -135,10 +148,17 @@ def get_included_points_indices_subspace(min_lims, max_lims, subspace_indices, X
     return index
 
 
-# In[13]:
-
-
 def sidebands(subspace_indices, Blockmin, Blockmax):
+    """Determina le sidebands di una scatola.
+    Inputs:
+    subspace_indices -- indici delle k variabili per cui si stanno
+    facendo variare gli estremi dei lati
+    Blockmin -- vettore con estremi inferiori dei lati della scatola
+    Blockmax -- vettore con estremi superiori dei lati della scatola
+    Outputs:
+    Sidemin -- vettore con estremi inferiori delle sidebands della scatola
+    Sidemax -- vettore con estremi superiori delle sidebands della scatola
+    """
     sidewidth = 0.5 * (2 ** (1 / len(subspace_indices)) - 1)
     Sidemin = Blockmin + sidewidth * (Blockmin - Blockmax)
     Sidemax = Blockmax + sidewidth * (Blockmax - Blockmin)
@@ -147,30 +167,24 @@ def sidebands(subspace_indices, Blockmin, Blockmax):
     return Sidemin, Sidemax
 
 
-# In[14]:
-
-
-def ZPLtau(Non, Noff, tau):
-    if Non == 0 or Noff == 0:
-        return 0
-    else:
-        Ntot = Non + Noff
-        z = np.sqrt(2.0) * np.sqrt(
-            Non * np.log(Non * (1 + tau) / (Ntot))
-            + Noff * np.log(Noff * (1 + tau) / (Ntot * tau))
-        )
-        if Non < (Noff / (tau)):
-            return -z
-        else:
-            return z
-
-
-# In[15]:
-
-
 def PCA_f(X, soglia):
+    """Trasforma un insieme di dati tramite l'analisi delle componenti
+    principali.
+    Inputs:
+    X -- l'insieme di dati sottoforma di DataFrame
+    soglia -- la frazione di varianza spiegata minima dell'insieme
+    di dati finale rispetto a quello iniziale
+    Outputs:
+    X_df_transformed -- DataFrame composto dalle componenti principali,
+    il numero di componenti principali viene determinato dal parametro
+    di soglia dato in input
+    """
+    X_std = StandardScaler().fit_transform(X)
+    X_std = (X_std - X_std.min(axis=0)) / (X_std.max(axis=0) - X_std.min(axis=0))
+    X = pd.DataFrame(data=X_std, index=None, columns=X.columns)
     pca = PCA(n_components=len(X.columns))  # max number of pca
     pca.fit(X)
+    # Standardizing the features
     X_transformed = pca.transform(X)
     var_cumulata = np.array(
         [pca.explained_variance_ratio_[:i].sum() for i in range(1, len(X.columns))]
@@ -187,32 +201,56 @@ def PCA_f(X, soglia):
 
 
 def get_num_events(block_min, block_max, X):
+    """Calcola il numero di eventi inclusi in una scatola.
+    Inputs:
+    Blockmin -- vettore con estremi inferiori dei lati della scatola
+    Blockmax -- vettore con estremi superiori dei lati della scatola
+    X -- l'insieme di dati sottoforma di DataFrame
+    Outputs:
+    il numero di eventi inclusi in una scatola
+    """
     return (
         (np.min(X - block_min, axis=1) > 0) & (np.min(block_max - X, axis=1) > 0)
     ).sum()
 
 
-# In[16]:
-
-
-def percentuale_segnale(prova):
-    size = len(prova)
-    ris = np.zeros([size, 2])
-    for k, v in prova.items():
-        ris[k] = (k, v["box_ZPLtau"])
-    punto_max = np.argmax(ris, axis=0)[1]
-    sotto_df = df.loc[prova[punto_max]["included_points"], :]
-    return len(sotto_df[sotto_df["Signal"] == 1.0]) / len(sotto_df)
-
-
-# In[17]:
-
-
 def best_box(dict_scatole, df_completo, frazione_segnale_tot):
+    """Seleziona la scatola migliore tra tutte quelle ottenute
+    tramite diverse iterazioni. La scatola migliore e' definita
+    come quella con massimo valore per la statistica considerata.
+    Inputs:
+    dict_scatole -- dizionario con all'interno tutte le scatole, la
+    chiave per ogni scatola e' definita pari all'iterazione in cui
+    quella scatola e' stata creata, per ogni scatola contiene le seguenti
+    informazioni:
+        - gli indici dei punti contenuti nella scatola
+        - il volume della scatola
+        - il numero di punti contenuti nella scatola
+        - gli estremi superiori e inferiori dei lati della scatola
+        - gli estremi superiori e inferiori delle sidebands della scatola
+        - il valore della statistica per la scatola
+        - gli indici delle variabili per cui i lati sono stati fatti variare
+    df_completo -- insieme di dati completo, in cui e' presente anche
+    la variabile risposta
+    frazione_segnale_tot -- la frazione di segnale presente nei dati
+    Outputs:
+    out -- un dizionario con al suo interno diverse caratteristiche
+        legate alla scatola con statistica maggiore:
+        - gli indici dei punti contenuti nella scatola
+        - il volume della scatola
+        - il numero di punti contenuti nella scatola
+        - gli estremi superiori e inferiori dei lati della scatola
+        - gli estremi superiori e inferiori delle sidebands della scatola
+        - il valore della statistica per la scatola
+        - gli indici delle variabili per cui i lati sono stati fatti variare
+        - la percentuale di punti nella scatola appartenenti alla classe di
+          segnale
+        - la percentuale di segnale totale catturato dalla scatola
+    """
     size = len(dict_scatole)
     ris = np.zeros([size, 2])
     for k, v in dict_scatole.items():
-        ris[k] = (k, v["box_ZPLtau"])
+        ris[k] = (k, v["stat_best"])
     punto_max = np.argmax(ris, axis=0)[1]
     sotto_df = df_completo.loc[dict_scatole[punto_max]["included_points"], :]
     if len(sotto_df) > 0:
@@ -236,10 +274,16 @@ def best_box(dict_scatole, df_completo, frazione_segnale_tot):
     return out
 
 
-# In[18]:
-
-
 def ZPL2(Non, Ntot, vol):
+    """Calcola la statistica da massimizzare.
+    Inputs:
+    Non -- il numero di punti contenuti nella scatola
+    Ntot -- il numero di punti totali presenti nell'insieme
+    di dati
+    vol -- il volume della scatola
+    Outputs:
+    z -- il valore della statistica ZPL per quella scatola
+    """
     if Non == 0:
         return 0
     else:
@@ -252,35 +296,23 @@ def ZPL2(Non, Ntot, vol):
             z = 0
         else:
             z = np.sqrt(2) * np.sqrt(valore)
-        # print(tau)
         if Non < (Noff / tau):
             return -z
         else:
             return z
 
 
-# In[19]:
-
-
-def R(Non, Ntot, volume):
-    if volume == 0:
-        return 0
-    else:
-        return Non / (Ntot * volume + 1)
-
-
-# In[20]:
-
-
-def R2(Non, Noff):
-    r = Non / (5 + Noff)
-    return r
-
-
-# In[21]:
-
-
 def scatola_iniziale_dist_euclidea(X_smpl, leaf_size):
+    """Definisce una scatola in modo che essa sia centrata nel punto con distanza
+    minore alla maggior parte di punti.
+    Inputs:
+    X_smpl -- il sottoinsieme dei dati di partenza
+    leaf_size -- il numero massimo di punti da avere in una foglia
+    Outputs:
+    Blockmin -- vettore con estremi inferiori dei lati della scatola
+    Blockmax -- vettore con estremi superiori dei lati della scatola
+    VolumeOrig -- volume della scatola
+    """
     kdt = KDTree(X_smpl, leaf_size=leaf_size, metric="euclidean")
     p = kdt.query(X_smpl, k=X_smpl.shape[0], return_distance=True)
     a = p[0]
@@ -309,66 +341,72 @@ def scatola_iniziale_dist_euclidea(X_smpl, leaf_size):
         return Blockmin, Blockmax, VolumeOrig[len(Blockmin) - 1]
 
 
-# In[22]:
-
-
-def ZPL_bayesiana(Non, Ntot, vol):
-    if Non == 0:
-        return 0
-    else:
-        Noff = Ntot - Non
-        alpha = (1 - vol) / (vol)
-
-        def B_01(Non, Noff, alpha):
-            Ntot = Non + Noff
-            gam = (1 + 2 * Noff) * power(alpha, (0.5 + Ntot)) * gamma(0.5 + Ntot)
-            delta = (
-                (2 * power((1 + alpha), Ntot))
-                * gamma(1 + Ntot)
-                * hyp2f1(0.5 + Noff, 1 + Ntot, 1.5 + Noff, (-1 / alpha))
-            )
-            c1_c2 = sqrt(pi) / (2 * atan(1 / sqrt(alpha)))
-            return gam / (c1_c2 * delta)
-
-    buf = 1 - B_01(Non, Noff, alpha)
-    if buf < -1.0:
-        buf = -1.0
-    # print(buf)
-    return sqrt("2") * erfinv(buf)
-
-
 # Nuovo gd
-
-# In[37]:
 
 
 def gradient_sequenziale(
     X,
-    number_trials,  # da quanti punti distinti parto
-    numbers_gd_loops,  # quante volte cerco per una determinata scatola
+    number_trials,
+    numbers_gd_loops,
     PCA_opt=False,
     soglia_pca=0.8,
     step_width_val=0.15,
     max_volume_box=0.05,
     epsilon=0.01,
-    ZPLtau_alg_orig=True,
     numero_slices=10,
 ):
-    # np.random.seed(10)
+    """Ricerca la scatola migliore per un certo numero di inizializzazioni differenti.
+    Inputs:
+    X -- matrice del modello
+    number_trials -- il numero di iterazioni che esegue l'algoritmo, ad ogni iterazione
+    l'inizializzazione e' differente
+    numbers_gd_loops -- il numero di passi eseguiti ad ogni iterazione per massimizzare
+    la statistica ZPL
+    PCA_opt -- True o False, permette di definire se eseguire la trasformazione tramite
+    l'analisi delle componenti principali o meno
+    soglia_pca -- soglia di varianza spiegata da considerare nell'analisi delle
+    componenti principali
+    step_width_val -- l'ampiezza del passo iniziale con cui muovere i lati della scatola
+    max_volume_box -- il volume massimo che può assumere la scatola
+    epsilon -- un valore piccolo utilizzato per modificare in certe situazioni
+    gli estremi dei lati della scatola
+    numero_slices -- il valore che determina in quante finestre suddividere il dominio
+    di ogni singola variabile esplicativa quando si vanno a selezionare le variabili
+    esplicative più promettenti da mantenere invariate anche all'iterazione successiva
+    Outputs:
+    out -- dizionario con all'interno tutte le scatole, la
+    chiave per ogni scatola e' definita pari all'iterazione in cui
+    quella scatola e' stata creata. Per ogni scatola sono registrate le seguenti
+    informazioni:
+        - gli indici dei punti contenuti nella scatola
+        - il volume della scatola
+        - il numero di punti contenuti nella scatola
+        - gli estremi superiori e inferiori dei lati della scatola
+        - gli estremi superiori e inferiori delle sidebands della scatola
+        - il valore della statistica per la scatola
+        - gli indici delle variabili per cui i lati sono stati fatti variare
+    """
     out = {}
+    X = df.loc[:, df.columns != "Signal"]
+    X_std = StandardScaler().fit_transform(X)
+    X_std = (X - X.min(axis=0)) / (X.max(axis=0) - X.min(axis=0))
+    X = pd.DataFrame(data=X_std, index=None, columns=X.columns)
     if PCA_opt:
         X = PCA_f(X, soglia_pca)
+    X_array = X.values
+    X_trasf = probability_integral_transform(X_array)
+    X = pd.DataFrame(data=X_trasf, index=None, columns=X.columns)
     X_numpy = X.to_numpy()
     Numbers_variables = X_numpy.shape[1]
     goodevents = X_numpy.shape[0]
-    Number_random_boxes = 6  # int(math.log(10/goodevents)/math.log(1/3))
+    Number_random_boxes = int(math.log(10 / goodevents) / math.log(1 / 3))
     if Numbers_variables <= Number_random_boxes:
         Number_random_boxes = Numbers_variables
     passaggio = 0
     for ntrial in range(number_trials):
         print(f"ntrial: {ntrial}")
-        # selezione casuale di un sottoinsieme di variabili
-        if Number_random_boxes >= 6:
+        if Number_random_boxes > Numbers_variables:
+            idx_fissi = int(Number_random_boxes / 2)
             if passaggio == 0:
                 subspace_indices = np.random.choice(
                     Numbers_variables, size=Number_random_boxes, replace=False
@@ -381,6 +419,7 @@ def gradient_sequenziale(
                 )
                 for kk in range(len(subspace_indices)):
                     for k_int in range(len(intervalli) - 1):
+                        print(k_int)
                         num_eventi_variabile_univariata[kk, k_int] = get_num_events(
                             intervalli[k_int],
                             intervalli[k_int + 1],
@@ -390,14 +429,15 @@ def gradient_sequenziale(
                         )
                 vettore_max = np.max(num_eventi_variabile_univariata, axis=1)
                 indici_ordinati = np.argsort(-1 * vettore_max, axis=0)
-                subspace_indices[0:3] = indici_ordinati[0:3]
-                var_non_usabili = subspace_indices[0:3]
+                subspace_indices[0:idx_fissi] = indici_ordinati[0:idx_fissi]
+                var_non_usabili = subspace_indices[0:idx_fissi]
                 tot_var = np.arange(X_numpy.shape[1])
                 possibili_indici = np.setxor1d(tot_var, var_non_usabili)
-                subspace_indices[3:6] = np.random.choice(
-                    possibili_indici, size=3, replace=False
+                subspace_indices[idx_fissi:Number_random_boxes] = np.random.choice(
+                    possibili_indici, size=idx_fissi, replace=False
                 )
             passaggio += 1
+
         else:
             subspace_indices = np.random.choice(
                 Numbers_variables, size=Number_random_boxes, replace=False
@@ -412,13 +452,16 @@ def gradient_sequenziale(
         )
         step_width = np.zeros([len(subspace_indices), 4]) + step_width_val
         num_events_block = get_num_events(Blockmin_numpy, Blockmax_numpy, X_numpy_smpl)
-        # controllo se per caso la scatola iniziale ha troppi pochi eventi all'interno,
+
+        # controllo se per caso la scatola iniziale ha troppi pochi eventi
+        # all'interno,
         # in caso richiamo la funzione
         if num_events_block <= 1:
             while num_events_block <= 1:
                 subspace_indices = np.random.choice(
                     Numbers_variables, size=Number_random_boxes, replace=False
                 )
+                X_numpy_smpl = X_numpy[:, subspace_indices]
                 Blockmin_numpy, Blockmax_numpy, _ = scatola_iniziale_dist_euclidea(
                     X_numpy_smpl, leaf_size=4000
                 )
@@ -569,27 +612,26 @@ def gradient_sequenziale(
                     else:
                         step_width[igrad, 3] = epsilon
 
-        # calcolo qta' per output
+            # calcolo qta' per output
 
-        included_points = get_included_points_indices_subspace(
-            Blockmin_numpy, Blockmax_numpy, subspace_indices, X_numpy
-        )
-        num_events_block_last = get_num_events(
-            Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
-        )
-        best_box_volume = (Blockmax_numpy - Blockmin_numpy).prod()
-        best_sidebands_min, best_sidebands_max = sidebands(
-            subspace_indices, Blockmin_numpy, Blockmax_numpy
-        )
-        best_VolumeSidebands = (best_sidebands_max - best_sidebands_min).prod()
-        migliore_Z = Zval_best
+            included_points = get_included_points_indices_subspace(
+                Blockmin_numpy, Blockmax_numpy, subspace_indices, X_numpy
+            )
+            num_events_block_last = get_num_events(
+                Blockmin_numpy, Blockmax_numpy, X_numpy_smpl
+            )
+            best_box_volume = (Blockmax_numpy - Blockmin_numpy).prod()
+            best_sidebands_min, best_sidebands_max = sidebands(
+                subspace_indices, Blockmin_numpy, Blockmax_numpy
+            )
+            best_VolumeSidebands = (best_sidebands_max - best_sidebands_min).prod()
+            migliore_Z = Zval_best
 
-        # stampare num eventi sidebands
         out[ntrial] = {
             "box_volume": best_box_volume,
             "box_vol_sidebands": best_VolumeSidebands,
             "box_IN": num_events_block_last,
-            "box_ZPLtau": migliore_Z,
+            "stat_best": migliore_Z,
             "Blockmin": Blockmin_numpy,
             "Blockmax": Blockmax_numpy,
             "subspace_idx": subspace_indices,
@@ -599,31 +641,22 @@ def gradient_sequenziale(
 
 
 if __name__ == "__main__":
-
-    df = creazione_df(10000, 20, 15, np.array([0.01, 0.1]), 0.999)
-    # df = pd.read_csv(r"dati_generati/dati_frodi_def_1perc.csv")
-    X = df.loc[:, df.columns != "Signal"]
-    X_array = X.values
-
-    X_trasf = probability_integral_transform(X_array)
-
-    X_df_trasf = pd.DataFrame(data=X_trasf, index=None, columns=X.columns)
-
+    ##############################################################################
+    frazione_segnale = 0.01  # NB CAMBIARE #######################################
+    ##############################################################################
+    # df = creazione_df(10000, 20, 15, np.array([0.01, 0.1]), 1 - frazione_segnale)
+    df = pd.read_csv(r"dati_generati/df_xgboost_def_5000_oss.csv")
     prova_start_time = time.perf_counter()
     prova = gradient_sequenziale(
-        number_trials=1000,
-        numbers_gd_loops=1000,
-        soglia_pca=0.98,
+        number_trials=250,
+        numbers_gd_loops=100,
+        soglia_pca=0.8,
         step_width_val=0.2,
         max_volume_box=0.25,
-        X=X_df_trasf,
-        PCA_opt=False,
-        ZPLtau_alg_orig=False,
+        X=df,
+        PCA_opt=True,
         numero_slices=10,
     )
     prova_time = time.perf_counter() - prova_start_time
-    print(best_box(prova, df, 0.01), file=open("output.txt", "a"))
+    print(best_box(prova, df, frazione_segnale), file=open("output.txt", "a"))
     print(prova_time)
-
-
-# %%
