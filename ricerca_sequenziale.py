@@ -354,6 +354,7 @@ def gradient_sequenziale(
     max_volume_box=0.05,
     epsilon=0.01,
     numero_slices=10,
+    inizializzazione_distanze=True,
 ):
     """Ricerca la scatola migliore per un certo numero di inizializzazioni differenti.
     Inputs:
@@ -373,6 +374,8 @@ def gradient_sequenziale(
     numero_slices -- il valore che determina in quante finestre suddividere il dominio
     di ogni singola variabile esplicativa quando si vanno a selezionare le variabili
     esplicative più promettenti da mantenere invariate anche all'iterazione successiva
+    inizializzazione_distanze -- opzione per eseguire l'inizializzazione della scatola
+    basandosi sulla distanze, se False la scatola è inizializzata casualmente
     Outputs:
     out -- dizionario con all'interno tutte le scatole, la
     chiave per ogni scatola e' definita pari all'iterazione in cui
@@ -405,7 +408,7 @@ def gradient_sequenziale(
     passaggio = 0
     for ntrial in range(number_trials):
         print(f"ntrial: {ntrial}")
-        if Number_random_boxes > Numbers_variables:
+        if Number_random_boxes > Numbers_variables and inizializzazione_distanze:
             idx_fissi = int(Number_random_boxes / 2)
             if passaggio == 0:
                 subspace_indices = np.random.choice(
@@ -648,14 +651,15 @@ if __name__ == "__main__":
     df = pd.read_csv(r"dati_generati/df_xgboost_def_5000_oss.csv")
     prova_start_time = time.perf_counter()
     prova = gradient_sequenziale(
-        number_trials=250,
-        numbers_gd_loops=100,
+        number_trials=5,
+        numbers_gd_loops=5,
         soglia_pca=0.8,
         step_width_val=0.2,
         max_volume_box=0.25,
         X=df,
         PCA_opt=True,
         numero_slices=10,
+        inizializzazione_distanze=False,
     )
     prova_time = time.perf_counter() - prova_start_time
     print(best_box(prova, df, frazione_segnale), file=open("output.txt", "a"))
